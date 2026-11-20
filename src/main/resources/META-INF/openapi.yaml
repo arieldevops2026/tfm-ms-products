@@ -1,0 +1,233 @@
+openapi: 3.0.3
+info:
+  title: Products Service
+  description: Microservicio de consulta del catalogo de productos del laboratorio experimental (TFM GitOps con entrega progresiva gobernada por SLO)
+  version: 1.0.0
+  contact:
+    name: Ariel Vazquez
+
+paths:
+  /api/v1/products/get-list:
+    post:
+      tags:
+        - Productos
+      summary: Obtener lista de productos
+      description: |-
+        Retorna la lista paginada de productos del catalogo.
+        Permite filtrar opcionalmente por categoria.
+      operationId: getProductList
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+        - $ref: '#/components/parameters/username'
+        - $ref: '#/components/parameters/clientIp'
+        - $ref: '#/components/parameters/channel'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetProductsRequest'
+            examples:
+              consulta-basica:
+                summary: Primera pagina del catalogo
+                value:
+                  pageNumber: 1
+                  maxRecords: 10
+              consulta-por-categoria:
+                summary: Consulta filtrada por categoria
+                value:
+                  pageNumber: 1
+                  maxRecords: 5
+                  category: "TECNOLOGIA"
+      responses:
+        '200':
+          description: Lista de productos obtenida exitosamente
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Product'
+              examples:
+                success:
+                  summary: Respuesta exitosa
+                  value:
+                    - productId: "PRD-001"
+                      name: "Laptop 14 pulgadas"
+                      category: "TECNOLOGIA"
+                      price:
+                        currency: "USD"
+                        amount: 850.00
+                    - productId: "PRD-002"
+                      name: "Monitor 27 pulgadas"
+                      category: "TECNOLOGIA"
+                      price:
+                        currency: "USD"
+                        amount: 280.00
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/products/get-by-id/{id}:
+    get:
+      tags:
+        - Productos
+      summary: Obtener un producto por su id
+      description: Retorna el detalle de un producto del catalogo.
+      operationId: getProductById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identificador del producto
+          schema:
+            type: string
+            example: "PRD-001"
+        - $ref: '#/components/parameters/sessionId'
+        - $ref: '#/components/parameters/username'
+        - $ref: '#/components/parameters/clientIp'
+        - $ref: '#/components/parameters/channel'
+      responses:
+        '200':
+          description: Producto obtenido exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+              examples:
+                success:
+                  summary: Respuesta exitosa
+                  value:
+                    productId: "PRD-001"
+                    name: "Laptop 14 pulgadas"
+                    category: "TECNOLOGIA"
+                    price:
+                      currency: "USD"
+                      amount: 850.00
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  parameters:
+    sessionId:
+      name: session-id
+      in: header
+      required: false
+      description: UUID de la sesion. Si no se envia, el servicio genera uno.
+      schema:
+        type: string
+        format: uuid
+        example: "123e4567-e89b-12d3-a456-426614174000"
+
+    username:
+      name: username
+      in: header
+      required: false
+      description: Nombre del usuario
+      schema:
+        type: string
+        example: "USRTFM"
+
+    clientIp:
+      name: client-ip
+      in: header
+      required: false
+      description: Direccion IP del cliente
+      schema:
+        type: string
+        example: "192.168.1.100"
+
+    channel:
+      name: channel
+      in: header
+      required: false
+      description: Canal de origen de la peticion
+      schema:
+        type: string
+        example: "LOADGEN"
+
+  schemas:
+    GetProductsRequest:
+      type: object
+      required:
+        - pageNumber
+        - maxRecords
+      properties:
+        pageNumber:
+          type: integer
+          minimum: 1
+          description: Numero de pagina, desde 1
+          example: 1
+        maxRecords:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Cantidad maxima de registros por pagina
+          example: 10
+        category:
+          type: string
+          description: Categoria por la que se filtra (opcional)
+          enum: [TECNOLOGIA, HOGAR, DEPORTES, LIBROS]
+          example: "TECNOLOGIA"
+
+    Product:
+      type: object
+      properties:
+        productId:
+          type: string
+          description: Identificador del producto
+          example: "PRD-001"
+        name:
+          type: string
+          description: Nombre del producto
+          example: "Laptop 14 pulgadas"
+        category:
+          type: string
+          description: Categoria del producto
+          example: "TECNOLOGIA"
+        price:
+          $ref: '#/components/schemas/AmountObj'
+
+    AmountObj:
+      type: object
+      properties:
+        currency:
+          type: string
+          example: "USD"
+        amount:
+          type: number
+          example: 850.00
+
+    ErrorResponse:
+      type: object
+      properties:
+        title:
+          type: string
+        status:
+          type: integer
+        violations:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+  responses:
+    BadRequest:
+      description: Peticion invalida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: Recurso no encontrado
+
+    InternalServerError:
+      description: Error interno del servidor
