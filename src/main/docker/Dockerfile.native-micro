@@ -1,32 +1,34 @@
 ####
-# This Dockerfile is used in order to build a container that runs the Quarkus application in native (no JVM) mode.
-# It uses a micro base image, tuned for Quarkus native executables.
-# It reduces the size of the resulting container image.
-# Check https://quarkus.io/guides/quarkus-runtime-base-image for further information about this image.
+# Imagen nativa (GraalVM/Mandrel) de ms-products.
 #
-# Before building the container image run:
-#
-# ./mvnw package -Dnative
-#
-# Then, build the image with:
-#
-# docker build -f src/main/docker/Dockerfile.native-micro -t quarkus/ms-products .
-#
-# Then run the container using:
-#
-# docker run -i --rm -p 8080:8080 quarkus/ms-products
-#
-# The `quay.io/quarkus/ubi9-quarkus-micro-image:2.0` base image is based on UBI 9.
-# To use UBI 8, switch to `quay.io/quarkus/quarkus-micro-image:2.0`.
+# 1. Compilar el binario nativo (no requiere GraalVM local, usa un contenedor):
+#      ./mvnw package -Pnative -DskipTests -Dquarkus.native.container-build=true
+# 2. Construir la imagen:
+#      docker build -f src/main/docker/Dockerfile.native-micro \
+#        --build-arg GIT_SHA=$(git rev-parse HEAD) -t tfm-ms-products:local .
+# 3. Ejecutar:
+#      docker run --rm -p 18001:18001 tfm-ms-products:local
 ###
-FROM quay.io/quarkus/ubi9-quarkus-micro-image:2.0
+
+# Imagen base fijada por digest (no solo por etiqueta) para que el build sea reproducible
+FROM quay.io/quarkus/ubi9-quarkus-micro-image:2.0@sha256:229cc07d422ed3c6ac0ce1102f6fdd6dbc7f421379c327c4891a2b751b8a98db
+
+# Commit del que sale la imagen: permite rastrear una version desplegada hasta su codigo
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/arieldevops2026/tfm-ms-products" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.title="ms-products" \
+      org.opencontainers.image.description="Microservicio ms-products del TFM (Quarkus nativo)"
+
 WORKDIR /work/
 RUN chown 1001 /work \
     && chmod "g+rwX" /work \
     && chown 1001:root /work
-COPY --chown=1001:root --chmod=0755 target/*-runner /work/application
+# El binario ya sale ejecutable del build nativo; COPY conserva los permisos (sin --chmod funciona tambien sin BuildKit)
+COPY --chown=1001:root target/*-runner /work/application
 
-EXPOSE 8080
+EXPOSE 18001
+# Usuario sin privilegios: el contenedor no corre como root
 USER 1001
 
 ENTRYPOINT ["./application", "-Dquarkus.http.host=0.0.0.0"]
