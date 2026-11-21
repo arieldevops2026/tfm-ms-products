@@ -110,7 +110,13 @@ jobs:
           git commit -m "feat(${SERVICE}): actualiza la imagen a ${SHORT_SHA}" \
                      -m "Imagen: ${DIGEST_REF}" \
                      -m "Origen: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
-          git push origin "$BRANCH"
+          # Si dos servicios publican a la vez, GitHub puede rechazar un push: se reintenta
+          for intento in 1 2 3; do
+            git push origin "$BRANCH" && break
+            if [ "$intento" = 3 ]; then echo "No se pudo subir la rama tras 3 intentos" >&2; exit 1; fi
+            echo "Push rechazado, reintento ${intento}/3 en $((intento * 10)) s"
+            sleep $((intento * 10))
+          done
 
           gh pr create --repo "$GITOPS_REPO" --base main --head "$BRANCH" \
             --title "feat(${SERVICE}): actualiza la imagen a ${SHORT_SHA}" \
