@@ -1,0 +1,122 @@
+# CI del microservicio. Al hacer push en main:
+#   1. compila el binario nativo (Mandrel en contenedor)
+#   2. construye la imagen y la sube a ghcr.io
+#   3. abre un Pull Request en tfm-gitops que fija esa imagen por digest
+# El despliegue NO ocurre aquí: ocurre cuando alguien fusiona ese PR y Argo CD lo aplica.
+#
+# Este archivo es idéntico en los tres repos: el nombre del servicio sale del nombre del repo.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "pom.xml"
+      - ".mvn/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+# Permisos mínimos del GITHUB_TOKEN: leer el código y publicar el paquete
+permissions:
+  contents: read
+  packages: write
+
+# Dos pushes seguidos no compilan a la vez: el segundo espera al primero
+concurrency:
+  group: ci-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  GITOPS_REPO: arieldevops2026/tfm-gitops
+
+jobs:
+  build-and-propose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Compilar binario nativo
+        run: ./mvnw -B package -Pnative -DskipTests -Dquarkus.native.container-build=true
+
+      - name: Construir y publicar la imagen
+        id: image
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"                 # tfm-ms-orders
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${REPO_NAME}"
+
+          echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+          docker build -f src/main/docker/Dockerfile.native-micro \
+            --build-arg GIT_SHA="$GITHUB_SHA" -t "${IMAGE}:${SHORT_SHA}" .
+          docker push "${IMAGE}:${SHORT_SHA}"
+
+          # Digest: identifica el contenido exacto de la imagen (a diferencia de una etiqueta)
+          DIGEST_REF="$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:${SHORT_SHA}")"
+          echo "Imagen publicada: ${DIGEST_REF}"
+
+          echo "service=${REPO_NAME#tfm-}" >> "$GITHUB_OUTPUT"   # ms-orders
+          echo "short_sha=${SHORT_SHA}"    >> "$GITHUB_OUTPUT"
+          echo "digest_ref=${DIGEST_REF}"  >> "$GITHUB_OUTPUT"
+
+      # GITHUB_TOKEN solo vale para este repo: para escribir en tfm-gitops hace falta un token propio
+      - name: Clonar tfm-gitops
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Proponer el cambio en tfm-gitops
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          SERVICE: ${{ steps.image.outputs.service }}
+          SHORT_SHA: ${{ steps.image.outputs.short_sha }}
+          DIGEST_REF: ${{ steps.image.outputs.digest_ref }}
+        run: |
+          set -euo pipefail
+          cd gitops
+          FILE="apps/tfm/${SERVICE}.yaml"
+          BRANCH="bump/${SERVICE}-${SHORT_SHA}"
+
+          # Imagen por digest, versión = commit corto y pull desde el registro
+          export DIGEST_REF SHORT_SHA
+          perl -0pi -e '
+            s|(image: )\S+|$1$ENV{DIGEST_REF}|;
+            s|(name: APP_VERSION\n\s+value: )"[^"]*"|$1"$ENV{SHORT_SHA}"|;
+            s|imagePullPolicy: Never|imagePullPolicy: IfNotPresent|;
+          ' "$FILE"
+
+          if git diff --quiet; then
+            echo "Sin cambios en ${FILE}: no hay PR que abrir."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$FILE"
+          git commit -m "feat(${SERVICE}): actualiza la imagen a ${SHORT_SHA}" \
+                     -m "Imagen: ${DIGEST_REF}" \
+                     -m "Origen: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          git push origin "$BRANCH"
+
+          gh pr create --repo "$GITOPS_REPO" --base main --head "$BRANCH" \
+            --title "feat(${SERVICE}): actualiza la imagen a ${SHORT_SHA}" \
+            --body "Imagen fijada por digest: \`${DIGEST_REF}\`
+
+          Commit de origen: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}
+          Ejecución del CI: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          Al fusionar este PR, Argo CD desplegará la versión."
