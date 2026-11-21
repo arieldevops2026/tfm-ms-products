@@ -87,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           cd gitops
-          FILE="apps/tfm/${SERVICE}.yaml"
+          FILE="apps/tfm/base/${SERVICE}.yaml"
           BRANCH="bump/${SERVICE}-${SHORT_SHA}"
 
           # Imagen por digest, versión = commit corto y pull desde el registro
